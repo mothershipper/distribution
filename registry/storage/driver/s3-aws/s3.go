@@ -30,11 +30,13 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/sts"
 
 	dcontext "github.com/docker/distribution/context"
 	"github.com/docker/distribution/registry/client/transport"
@@ -103,6 +105,9 @@ type DriverParameters struct {
 	UserAgent                   string
 	ObjectACL                   string
 	SessionToken                string
+	Path                        string
+	RoleARN                     string
+	SessionName                 string
 }
 
 func init() {
@@ -341,6 +346,10 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 
 	sessionToken := ""
 
+	path := ensureString("path", "", parameters)
+	role := ensureString("rolearn", "", parameters)
+	sessionName := ensureString("sessionname", "", parameters)
+
 	params := DriverParameters{
 		fmt.Sprint(accessKey),
 		fmt.Sprint(secretKey),
@@ -361,6 +370,9 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 		fmt.Sprint(userAgent),
 		objectACL,
 		fmt.Sprint(sessionToken),
+		path,
+		role,
+		sessionName,
 	}
 
 	return New(params)
@@ -420,6 +432,7 @@ func New(params DriverParameters) (*Driver, error) {
 		&credentials.EnvProvider{},
 		&credentials.SharedCredentialsProvider{},
 		&ec2rolecreds.EC2RoleProvider{Client: ec2metadata.New(sess)},
+		stscreds.NewWebIdentityRoleProvider(sts.New(sess), params.RoleARN, params.SessionName, params.Path),
 	})
 
 	if params.RegionEndpoint != "" {
@@ -1359,4 +1372,17 @@ func (w *writer) flushPart() error {
 	w.readyPart = w.pendingPart
 	w.pendingPart = nil
 	return nil
+}
+
+func ensureString(key string, def string, params map[string]interface{}) string {
+	value, ok := params[key]
+	if !ok {
+		return def
+	}
+
+	strVal, ok := value.(string)
+	if !ok {
+		return def
+	}
+	return strVal
 }
