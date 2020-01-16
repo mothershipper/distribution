@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -346,9 +347,9 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 
 	sessionToken := ""
 
-	path := ensureString("path", "", parameters)
-	role := ensureString("rolearn", "", parameters)
-	sessionName := ensureString("sessionname", "", parameters)
+	path := ensureString("path", os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE"), parameters)
+	role := ensureString("rolename", os.Getenv("AWS_ROLE_ARN"), parameters)
+	sessionName := ensureString("sessionname", os.Getenv("AWS_ROLE_SESSION_NAME"), parameters)
 
 	params := DriverParameters{
 		fmt.Sprint(accessKey),
