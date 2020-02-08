@@ -20,7 +20,6 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
-	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -31,13 +30,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/sts"
 
 	dcontext "github.com/docker/distribution/context"
 	"github.com/docker/distribution/registry/client/transport"
@@ -106,9 +103,6 @@ type DriverParameters struct {
 	UserAgent                   string
 	ObjectACL                   string
 	SessionToken                string
-	Path                        string
-	RoleARN                     string
-	SessionName                 string
 }
 
 func init() {
@@ -347,10 +341,6 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 
 	sessionToken := ""
 
-	path := ensureString("path", os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE"), parameters)
-	role := ensureString("rolename", os.Getenv("AWS_ROLE_ARN"), parameters)
-	sessionName := ensureString("sessionname", os.Getenv("AWS_ROLE_SESSION_NAME"), parameters)
-
 	params := DriverParameters{
 		fmt.Sprint(accessKey),
 		fmt.Sprint(secretKey),
@@ -371,9 +361,6 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 		fmt.Sprint(userAgent),
 		objectACL,
 		fmt.Sprint(sessionToken),
-		path,
-		role,
-		sessionName,
 	}
 
 	return New(params)
@@ -422,26 +409,32 @@ func New(params DriverParameters) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new session: %v", err)
 	}
-	creds := credentials.NewChainCredentials([]credentials.Provider{
-		&credentials.StaticProvider{
-			Value: credentials.Value{
-				AccessKeyID:     params.AccessKey,
-				SecretAccessKey: params.SecretKey,
-				SessionToken:    params.SessionToken,
+
+	if params.AccessKey != "" {
+		// XXX: This is left for the legacy behavior -- if an access key / secret key and
+		//      token are provided, use the old credential chain. NewSession() should handle
+		//      the rest of these options in the correct order.
+		creds := credentials.NewChainCredentials([]credentials.Provider{
+			&credentials.StaticProvider{
+				Value: credentials.Value{
+					AccessKeyID:     params.AccessKey,
+					SecretAccessKey: params.SecretKey,
+					SessionToken:    params.SessionToken,
+				},
 			},
-		},
-		&credentials.EnvProvider{},
-		&credentials.SharedCredentialsProvider{},
-		&ec2rolecreds.EC2RoleProvider{Client: ec2metadata.New(sess)},
-		stscreds.NewWebIdentityRoleProvider(sts.New(sess), params.RoleARN, params.SessionName, params.Path),
-	})
+			&credentials.EnvProvider{},
+			&credentials.SharedCredentialsProvider{},
+			&ec2rolecreds.EC2RoleProvider{Client: ec2metadata.New(sess)},
+		})
+		awsConfig.WithCredentials(creds)
+		panic(fmt.Errorf("blah"))
+	}
 
 	if params.RegionEndpoint != "" {
 		awsConfig.WithS3ForcePathStyle(true)
 		awsConfig.WithEndpoint(params.RegionEndpoint)
 	}
 
-	awsConfig.WithCredentials(creds)
 	awsConfig.WithRegion(params.Region)
 	awsConfig.WithDisableSSL(!params.Secure)
 
@@ -1373,17 +1366,4 @@ func (w *writer) flushPart() error {
 	w.readyPart = w.pendingPart
 	w.pendingPart = nil
 	return nil
-}
-
-func ensureString(key string, def string, params map[string]interface{}) string {
-	value, ok := params[key]
-	if !ok {
-		return def
-	}
-
-	strVal, ok := value.(string)
-	if !ok {
-		return def
-	}
-	return strVal
 }
